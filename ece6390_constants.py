@@ -7,6 +7,7 @@ from time_lib import PCS_Time
 
 @dataclass
 class Quantity:
+    """helper library to aid in unit conversions / printing quantities for readability"""
     _value: Optional[f64] = 0.0
     unit: Optional[str] = "-"
 
@@ -65,16 +66,37 @@ class Quantity:
         return result
 
     @property
-    def value(self) -> None:
+    def value(self) -> f64:
         return self._value
 
     @value.setter
     def value(self, s: f64) -> None:
         self._value = s
 
+    @property
+    def km(self) -> f64:
+        if self.unit not in ["cm", "m", "km", "au"]:
+            raise AttributeError
 
+        else:
+            if self.unit == "cm":
+                return self.value / 100000
+
+            elif self.unit == "m": 
+                return self.value / 1000
+
+            elif self.unit == "km":
+                return self.value
+
+            elif self.unit == "au":
+                return self.value * f64(150e6)
+
+
+# list of commonly used constants in ece6390
 Earth_radius = Quantity(6380, "km")
+Sun_radius = Quantity(696340, "km")
 Earth_mass = Quantity(5.974e24, "kg")
+Sun_mass = Quantity(1.989e30, "kg")
 Gravitational_constant = Quantity(6.672e-20, "km^3/(kg*s^2)")
 Sidereal_day = PCS_Time(_hours=23, _minutes=56, _seconds=4.09)
 Keplers_constant_on_Earth = Quantity(3.986004418e5, "km^3/s^2")

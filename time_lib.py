@@ -7,6 +7,7 @@ from numpy import float64 as f64
 
 @dataclass
 class PCS_Time:
+    """a time library to help me convert between different time bases and display time in a more meaninful way"""
     _years: Optional[f64] = 0
     _weeks: Optional[f64] = 0
     _days: Optional[f64] = 0
@@ -89,7 +90,7 @@ class PCS_Time:
             (seconds, time_left) = divmod(time_left, 1)
             return "{:.0f} minutes, {:.0f} seconds".format(minutes, seconds)
         else:
-            return "{:.0f} seconds".format(seconds)
+            return "{:.0f} seconds".format(self.seconds)
 
 
     @property
