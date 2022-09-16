@@ -28,7 +28,8 @@ if __name__ == "__main__":
                                   n             =n)
 
     # part b
-    tf = PCS_Time(_days=2, _hours=1, _minutes=5).seconds
+    # tf = PCS_Time(_days=2, _hours=1, _minutes=5).seconds
+    tf = PCS_Time(_days=2, _hours=2).seconds
     n = int((tf-t0)/delta_t_1)
     OS2 = NumericalOrbitSimulator(R_init        =Quantity(f64(20e3), "km"), 
                                   theta_init    =Quantity(f64(0), "rad"), 
@@ -48,8 +49,8 @@ if __name__ == "__main__":
                                   n             =n)
 
     # part d - Halley's Comet
-    tf = PCS_Time(_years=75).seconds
-    delta_t_2 = 10000 # seconds
+    tf = PCS_Time(_years=78).seconds
+    delta_t_2 = 1000 # seconds
     n = int((tf-t0)/delta_t_2)
     Halley_perihelion   = Quantity(f64(0.59278), "au") # from wikipedia
     Halley_aphelion     = Quantity(f64(35.14), "au")

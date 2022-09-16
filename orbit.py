@@ -9,7 +9,11 @@ from numpy import pi
 from numpy import sqrt
 from numpy import float_power as fpow
 
+from ece6390_constants import Atlanta_latitude as ES_LAT
+from ece6390_constants import Atlanta_longitude as ES_LON
+from ece6390_constants import Earth_angular_veolcity as wEarth
 from ece6390_constants import Earth_mass as Me
+from ece6390_constants import Earth_radius as R_earth
 from ece6390_constants import Sun_mass as Msun
 from ece6390_constants import Gravitational_constant as Gravity
 from ece6390_constants import Sidereal_day
@@ -92,6 +96,7 @@ class CircularOrbit(EllipticalOrbit):
         return self.V
 
 
+
 class NumericalOrbitSimulator(object):
     delta_t = Quantity(unit="s")
     G = Quantity()
@@ -107,7 +112,15 @@ class NumericalOrbitSimulator(object):
     delta_theta = None
     theta_dot   = None
 
-    def __init__(self, R_init: Quantity, theta_init: Quantity, V_r_init: Quantity,  V_theta_init: Quantity, delta_t: Quantity, n: int, Grav=Gravity, Mp=Me, ) -> None:
+    def __init__(self, R_init: Quantity, 
+                        theta_init: Quantity, 
+                        V_r_init: Quantity,  
+                        V_theta_init: Quantity, 
+                        delta_t: Quantity, 
+                        n: int, 
+                        Grav=Gravity, 
+                        Mp=Me, ) -> None:
+
         if delta_t.unit != self.delta_t.unit:
             raise AttributeError("Wrong units on delta_t arguement, must be (s)")
         self.delta_t = delta_t
@@ -127,7 +140,7 @@ class NumericalOrbitSimulator(object):
             if i == 0:
                 self.r[i] = R_init.km
                 self.r_dot[i] = V_r_init()
-                self.theta[i] = theta_init()
+                self.theta[i] = theta_init.rad
                 self.theta_dot[i] = V_theta_init() / self.r[i]
 
                 self.delta_r[i] = self.r_dot[i]*self.delta_t()
@@ -157,7 +170,7 @@ class NumericalOrbitSimulator(object):
 
     def delta_r_n_plus_one(self, delta_r_n, r_n, delta_theta_n):
         a = (r_n+(1/2)*delta_r_n)*fpow(delta_theta_n, 2)
-        b = self.G*self.M*fpow(self.delta_t(), 2)/fpow(r_n, 2)
+        b = self.G*self.M*fpow(self.delta_t(), 2)/fpow((r_n+(0.5*delta_r_n)), 2)
 
         return (delta_r_n + (a - b))
 
@@ -181,6 +194,62 @@ class NumericalOrbitSimulator(object):
         return Quantity(min(self.r), "km")
 
 
+class OrbitSimulatorWithLookAngles(NumericalOrbitSimulator):
+    rotation_of_earth_in_fixed_frame = None
+    ssp_lat = None
+    ssp_lon = None
+    look_angle_azimuth = None
+    look_angle_elevation = None
+    es_lat = Quantity(0, "deg")
+    es_lon = Quantity(0, "deg")
+
+    def __init__(self, R_init: Quantity, theta_init: Quantity, V_r_init: Quantity, V_theta_init: Quantity, delta_t: Quantity, n: int, ssp_lat_init: Quantity, es_lat: Quantity, es_lon: Quantity, Grav=Gravity, Mp=Me) -> None:
+        super().__init__(R_init, theta_init, V_r_init, V_theta_init, delta_t, n, Grav, Mp)
+
+        if es_lat.unit != "deg" or es_lon.unit != "deg":
+            raise AttributeError("Wrong units on Earth State coordinates, must be (deg)")
+        
+        self.es_lon = es_lon
+        self.es_lat = es_lat
+
+        self.rotation_of_earth_in_fixed_frame = f64(np.zeros(n))
+        self.ssp_lat                = f64(np.zeros(n))
+        self.ssp_lon                = f64(np.zeros(n))
+        self.look_angle_azimuth     = f64(np.zeros(n))
+        self.look_angle_elevation   = f64(np.zeros(n))
+
+        for i in range(n):
+            # hard-coded orbit on the equator for now...
+            self.ssp_lat[i] = np.deg2rad(ES_LAT())
+
+            # the longitude of the satellite is the difference in the rotation of the earth in a fixed frame and rotation of the satellite in the fixed frame
+            # 0-2pi rad
+            self.ssp_lon[i] = (self.rotation_of_earth_in_fixed_frame[i] - self.theta[i]) if (self.rotation_of_earth_in_fixed_frame[i] - self.theta[i]) > 0 else (2*np.pi + self.rotation_of_earth_in_fixed_frame[i] - self.theta[i])
+
+            le = self.es_lon()
+            Le = self.es_lat()
+
+            ls = self.ssp_lon[i]
+            Ls = self.ssp_lat[i]
+
+            # compute the azimuth
+            gamma = np.arccos(np.sin(Ls)*np.sin(Le)+np.cos(Ls)*np.cos(Le)*np.cos(ls-le))
+            alpha = np.arcsin(np.sin(abs(le-ls)*np.cos(Ls)/np.sin(gamma)))
+
+            self.look_angle_azimuth[i] = (np.pi + alpha) if (self.ssp_lon[i] < np.deg2rad(self.es_lon())) else (np.pi - alpha)
+
+            # compute elevation
+            re = R_earth()
+            rs = self.r[i]
+
+            self.look_angle_elevation[i] = np.arccos(np.sin(gamma)/np.sqrt(1+np.square(re/rs)-2*(re/rs)*np.cos(gamma)))
+
+            if i == (n-1):
+                break
+            self.rotation_of_earth_in_fixed_frame[i+1] = (self.rotation_of_earth_in_fixed_frame[i] + wEarth * delta_t) % (2*np.pi)
+
+
+
 if __name__ == "__main__":
 
     T = Quantity(Sidereal_day.seconds, "seconds")
@@ -197,3 +266,18 @@ if __name__ == "__main__":
     hc = EllipticalOrbit(Mp=Msun, apoapsis=Halley_aphelion, periapsis=Halley_perihelion)
     print("Halley's comet period: {},\nEccentricity: {:.3f},\nSemi-major axis: {},\nV_max: {},\nV_min: {},\naphilion: {},\nperihelion: {}\n".format(hc.period, hc.eccentricity, hc.a, hc.V_max, hc.V_min, Halley_aphelion, Halley_perihelion))
 
+
+    t0 = f64(0)
+    tf = PCS_Time(_weeks=1).seconds
+    delta_t_1 = f64(5)          # seconds
+    n = int((tf-t0)/delta_t_1)  # number of samples
+
+    OS1 = OrbitSimulatorWithLookAngles(R_init        =geostationary_orbit.radius, 
+                                        theta_init    =ES_LON, 
+                                        V_r_init      =Quantity(f64(0), "km/s"), 
+                                        V_theta_init  =geostationary_orbit.velocity, 
+                                        delta_t       =Quantity(delta_t_1, "s"),
+                                        n             =n,
+                                        ssp_lat_init  =Quantity(0, "deg"),
+                                        es_lat        =ES_LAT,
+                                        es_lon        =ES_LON)
