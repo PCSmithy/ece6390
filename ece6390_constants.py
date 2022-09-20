@@ -16,9 +16,12 @@ class Quantity:
         return self.value
 
     def __str__(self) -> str:
-        return "{:.3e} {}".format(self._value, self.unit)
+        if self.unit == "rad":
+            return "{:.3f} degrees".format(self.deg)
+        else:
+            return "{:.3e} {}".format(self._value, self.unit)
 
-    def __add__(self, other) -> None:
+    def __add__(self, other) -> f64:
         result = None
         if isinstance(other, (f64, int)):
             result = self.value + other
@@ -30,7 +33,7 @@ class Quantity:
 
         return result
 
-    def __sub__(self, other) -> None:
+    def __sub__(self, other) -> f64:
         result = None
         if isinstance(other, (f64, int)):
             result = self.value - other
@@ -42,7 +45,7 @@ class Quantity:
 
         return result
 
-    def __mul__(self, other) -> None:
+    def __mul__(self, other) -> f64:
         result = None
         if isinstance(other, (f64, int)):
             result = self.value * other
@@ -54,7 +57,7 @@ class Quantity:
 
         return result
 
-    def __truediv__(self, other) -> None:
+    def __truediv__(self, other) -> f64:
         result = None
         if isinstance(other, (f64, int)):
             result = self.value / other
@@ -127,6 +130,7 @@ Keplers_constant_on_Earth = Quantity(3.986004418e5, "km^3/s^2")
 Atlanta_longitude = Quantity(-84.387985, "deg")
 Atlanta_latitude = Quantity(33.748997, "deg")
 Earth_angular_veolcity = Quantity(((2*np.pi) / Sidereal_day.seconds), "rad/s")
+Solar_pressure = Quantity(9.08e-9, "kg-km/(s^2-m^2)")
 
 if __name__ == "__main__":
 

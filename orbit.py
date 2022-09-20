@@ -5,8 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from numpy import float64 as f64
-from numpy import pi
-from numpy import sqrt
+from numpy import pi, sqrt, square, cos, sin, arctan2, arctan
 from numpy import float_power as fpow
 
 from ece6390_constants import Atlanta_latitude as ES_LAT
@@ -15,10 +14,12 @@ from ece6390_constants import Earth_angular_veolcity as wEarth
 from ece6390_constants import Earth_mass as Me
 from ece6390_constants import Earth_radius as R_earth
 from ece6390_constants import Sun_mass as Msun
+from ece6390_constants import Solar_pressure as Fsun
 from ece6390_constants import Gravitational_constant as Gravity
 from ece6390_constants import Sidereal_day
 from ece6390_constants import Quantity
 
+from look_angles import LookAngles
 from time_lib import PCS_Time
 
 class EllipticalOrbit(object):
@@ -79,6 +80,7 @@ class EllipticalOrbit(object):
     def V_min(self):
         return Quantity(f64(sqrt(self.G*self.M*(1-self.e()) / (self.a*(1+self.e())))), "km/s")
 
+
 class CircularOrbit(EllipticalOrbit):
     def __init__(self, Grav=Gravity, Mp=Me, T_seconds: Optional[Quantity] = None, R: Optional[Quantity] = None) -> None:
         if T_seconds is None and R is None:
@@ -96,15 +98,13 @@ class CircularOrbit(EllipticalOrbit):
         return self.V
 
 
-
 class NumericalOrbitSimulator(object):
     delta_t = Quantity(unit="s")
     G = Quantity()
     M = Quantity()
-
     T = None
 
-    # arrays to hold the state data r, r_dot, theta, and theta_dot
+    # orbit params
     r           = None
     delta_r     = None
     r_dot       = None
@@ -112,12 +112,29 @@ class NumericalOrbitSimulator(object):
     delta_theta = None
     theta_dot   = None
 
-    def __init__(self, R_init: Quantity, 
+    # solar pressure params
+    alpha = None
+    As = None
+    Ms = None
+
+    # look angle params
+    rotation_of_earth_in_fixed_frame = None
+    ssp_lat = None
+    ssp_lon = None
+    look_angle_azimuth = None
+    look_angle_elevation = None
+    es_lat = Quantity(0, "deg")
+    es_lon = Quantity(0, "deg")
+
+    def __init__(self,  R_init: Quantity, 
                         theta_init: Quantity, 
                         V_r_init: Quantity,  
                         V_theta_init: Quantity, 
                         delta_t: Quantity, 
                         n: int, 
+                        As: Quantity=Quantity(0, "m^2"),
+                        Ms: Quantity=Quantity(10, "kg"),
+                        alpha=0.5,
                         Grav=Gravity, 
                         Mp=Me, ) -> None:
 
@@ -127,6 +144,11 @@ class NumericalOrbitSimulator(object):
         self.G = Grav
         self.M = Mp
 
+        self.alpha = alpha
+        self.As = As
+        self.Ms = Ms
+
+        self.rotation_of_earth_in_fixed_frame = f64(np.zeros(n))
         self.r           = f64(np.zeros(n))
         self.delta_r     = f64(np.zeros(n))
         self.r_dot       = f64(np.zeros(n))
@@ -149,33 +171,74 @@ class NumericalOrbitSimulator(object):
                 self.delta_theta[i] = self.theta_dot[i]*self.delta_t()
                 self.theta[i+1] = self.theta[i] + self.delta_theta[i]
 
-                self.delta_r[i+1] = self.delta_r_n_plus_one(self.delta_r[i], self.r[i], self.delta_theta[i])
-                self.delta_theta[i+1] = self.delta_theta_n_plus_one(self.delta_theta[i], self.delta_r[i], self.r[i])
+                self.delta_r[i+1] = self.delta_r_n_plus_one(self.r[i], self.theta[i], self.delta_r[i], self.delta_theta[i])
+                self.delta_theta[i+1] = self.delta_theta_n_plus_one(self.r[i], self.theta[i], self.delta_r[i], self.delta_theta[i])
                 continue
 
             # exit out at the end to avoid array size mismatches
             if i == n-1:
                 break
 
+            self.rotation_of_earth_in_fixed_frame[i+1] = (self.rotation_of_earth_in_fixed_frame[i] + wEarth * delta_t) % (2*np.pi)
+
             self.r[i+1] = self.r[i] + self.delta_r[i]
             self.theta[i+1] = (self.theta[i] + self.delta_theta[i]) % (2*pi)
 
-            self.delta_r[i+1] = self.delta_r_n_plus_one(self.delta_r[i], self.r[i], self.delta_theta[i])
-            self.delta_theta[i+1] = self.delta_theta_n_plus_one(self.delta_theta[i], self.delta_r[i], self.r[i])
+            self.delta_r[i+1] = self.delta_r_n_plus_one(self.r[i], self.theta[i], self.delta_r[i], self.delta_theta[i])
+            self.delta_theta[i+1] = self.delta_theta_n_plus_one(self.r[i], self.theta[i], self.delta_r[i], self.delta_theta[i])
 
             # detect when we've reached 1 full period
-            if (self.theta[i] > (1.9*pi)) and (self.theta[i+1] < (0.1*pi)):
-                self.T = PCS_Time(_seconds=i*self.delta_t())
-                print("1 Period took {} samples, or {}".format(i, PCS_Time(_seconds=i*self.delta_t())))
+            # if (self.theta[i] > (1.9*pi)) and (self.theta[i+1] < (0.1*pi)):
+            #     self.T = PCS_Time(_seconds=i*self.delta_t())
+            #     print("1 Period took {} samples, or {}".format(i, PCS_Time(_seconds=i*self.delta_t())))
 
-    def delta_r_n_plus_one(self, delta_r_n, r_n, delta_theta_n):
-        a = (r_n+(1/2)*delta_r_n)*fpow(delta_theta_n, 2)
-        b = self.G*self.M*fpow(self.delta_t(), 2)/fpow((r_n+(0.5*delta_r_n)), 2)
+    def delta_r_n_plus_one(self, r_n, theta_n, delta_r_n, delta_theta_n):
+        dt = self.delta_t()
+        r = r_n + (1/2)*delta_r_n
+        phi = theta_n + (1/2)*delta_theta_n
+        mu = self.M*self.G
+        As = self.As()
+        Ms = self.Ms()
 
-        return (delta_r_n + (a - b))
+        a = r*square(delta_theta_n)
+        b = mu*square(dt)/square(r)
+        c = Fsun()*self.alpha*As*square(dt)*cos(phi)/Ms
 
-    def delta_theta_n_plus_one(self, delta_theta_n, delta_r_n, r_n):
-        return (delta_theta_n - (2*delta_r_n*delta_theta_n)/(r_n+(1/2)*delta_r_n))
+        return (delta_r_n + a - b + c)
+
+    def delta_theta_n_plus_one(self, r_n, theta_n, delta_r_n, delta_theta_n):
+        dt = self.delta_t()
+        r = r_n + (1/2)*delta_r_n
+        phi = theta_n + (1/2)*delta_theta_n
+        As = self.As()
+        Ms = self.Ms()
+
+        a = 2*delta_r_n*delta_theta_n
+        b = Fsun()*self.alpha*As*square(dt)*sin(phi)/Ms
+
+        return (delta_theta_n - (a + b)/r)
+
+    def compute_look_angles(self, es_lat: Quantity = ES_LAT, es_lon: Quantity = ES_LON) -> None:
+        n = len(self.r)
+        self.ssp_lat = f64(np.zeros(n))
+        self.ssp_lon = f64(np.zeros(n))
+        self.look_angle_azimuth = f64(np.zeros(n))
+        self.look_angle_elevation = f64(np.zeros(n))
+        self.es_lat = es_lat
+        self.es_lon = es_lon
+
+        for i in range(n):
+            # hard-coded orbit on the equator for now...
+            self.ssp_lat[i] = 0.0
+
+            # the longitude of the satellite is the difference in the rotation of the earth in a fixed frame and rotation of the satellite in the fixed frame
+            # 0-2pi rad
+            self.ssp_lon[i] = (self.theta[i] - self.rotation_of_earth_in_fixed_frame[i]) if (self.theta[i] - self.rotation_of_earth_in_fixed_frame[i]) > 0 else (2*np.pi + self.theta[i] - self.rotation_of_earth_in_fixed_frame[i])
+
+            LA = LookAngles(self.ssp_lat[i], self.ssp_lon[i], self.r[i])
+
+            self.look_angle_azimuth[i] = LA.azimuth()
+            self.look_angle_elevation[i] = LA.elevation()
 
     @property
     def period(self):
@@ -192,61 +255,6 @@ class NumericalOrbitSimulator(object):
     @property
     def perigee(self):
         return Quantity(min(self.r), "km")
-
-
-class OrbitSimulatorWithLookAngles(NumericalOrbitSimulator):
-    rotation_of_earth_in_fixed_frame = None
-    ssp_lat = None
-    ssp_lon = None
-    look_angle_azimuth = None
-    look_angle_elevation = None
-    es_lat = Quantity(0, "deg")
-    es_lon = Quantity(0, "deg")
-
-    def __init__(self, R_init: Quantity, theta_init: Quantity, V_r_init: Quantity, V_theta_init: Quantity, delta_t: Quantity, n: int, ssp_lat_init: Quantity, es_lat: Quantity, es_lon: Quantity, Grav=Gravity, Mp=Me) -> None:
-        super().__init__(R_init, theta_init, V_r_init, V_theta_init, delta_t, n, Grav, Mp)
-
-        if es_lat.unit != "deg" or es_lon.unit != "deg":
-            raise AttributeError("Wrong units on Earth State coordinates, must be (deg)")
-        
-        self.es_lon = es_lon
-        self.es_lat = es_lat
-
-        self.rotation_of_earth_in_fixed_frame = f64(np.zeros(n))
-        self.ssp_lat                = f64(np.zeros(n))
-        self.ssp_lon                = f64(np.zeros(n))
-        self.look_angle_azimuth     = f64(np.zeros(n))
-        self.look_angle_elevation   = f64(np.zeros(n))
-
-        for i in range(n):
-            # hard-coded orbit on the equator for now...
-            self.ssp_lat[i] = np.deg2rad(ES_LAT())
-
-            # the longitude of the satellite is the difference in the rotation of the earth in a fixed frame and rotation of the satellite in the fixed frame
-            # 0-2pi rad
-            self.ssp_lon[i] = (self.rotation_of_earth_in_fixed_frame[i] - self.theta[i]) if (self.rotation_of_earth_in_fixed_frame[i] - self.theta[i]) > 0 else (2*np.pi + self.rotation_of_earth_in_fixed_frame[i] - self.theta[i])
-
-            le = self.es_lon()
-            Le = self.es_lat()
-
-            ls = self.ssp_lon[i]
-            Ls = self.ssp_lat[i]
-
-            # compute the azimuth
-            gamma = np.arccos(np.sin(Ls)*np.sin(Le)+np.cos(Ls)*np.cos(Le)*np.cos(ls-le))
-            alpha = np.arcsin(np.sin(abs(le-ls)*np.cos(Ls)/np.sin(gamma)))
-
-            self.look_angle_azimuth[i] = (np.pi + alpha) if (self.ssp_lon[i] < np.deg2rad(self.es_lon())) else (np.pi - alpha)
-
-            # compute elevation
-            re = R_earth()
-            rs = self.r[i]
-
-            self.look_angle_elevation[i] = np.arccos(np.sin(gamma)/np.sqrt(1+np.square(re/rs)-2*(re/rs)*np.cos(gamma)))
-
-            if i == (n-1):
-                break
-            self.rotation_of_earth_in_fixed_frame[i+1] = (self.rotation_of_earth_in_fixed_frame[i] + wEarth * delta_t) % (2*np.pi)
 
 
 
@@ -266,18 +274,75 @@ if __name__ == "__main__":
     hc = EllipticalOrbit(Mp=Msun, apoapsis=Halley_aphelion, periapsis=Halley_perihelion)
     print("Halley's comet period: {},\nEccentricity: {:.3f},\nSemi-major axis: {},\nV_max: {},\nV_min: {},\naphilion: {},\nperihelion: {}\n".format(hc.period, hc.eccentricity, hc.a, hc.V_max, hc.V_min, Halley_aphelion, Halley_perihelion))
 
+    cross_sectional_area = Quantity(30, "m^2")
+    mass = Quantity(1000, "kg")
+
+    area_density = mass / cross_sectional_area
 
     t0 = f64(0)
-    tf = PCS_Time(_weeks=1).seconds
-    delta_t_1 = f64(5)          # seconds
+    tf = PCS_Time(_years=1).seconds
+    delta_t_1 = f64(10)          # seconds
     n = int((tf-t0)/delta_t_1)  # number of samples
+    t = np.linspace(t0, tf, n)
 
-    OS1 = OrbitSimulatorWithLookAngles(R_init        =geostationary_orbit.radius, 
-                                        theta_init    =ES_LON, 
-                                        V_r_init      =Quantity(f64(0), "km/s"), 
-                                        V_theta_init  =geostationary_orbit.velocity, 
-                                        delta_t       =Quantity(delta_t_1, "s"),
-                                        n             =n,
-                                        ssp_lat_init  =Quantity(0, "deg"),
-                                        es_lat        =ES_LAT,
-                                        es_lon        =ES_LON)
+    OS1 = NumericalOrbitSimulator(R_init        =geostationary_orbit.radius, 
+                                theta_init    =ES_LON, 
+                                V_r_init      =Quantity(f64(0), "km/s"), 
+                                V_theta_init  =geostationary_orbit.velocity, 
+                                delta_t       =Quantity(delta_t_1, "s"),
+                                n             =n,
+                                As              =cross_sectional_area,
+                                Ms              =mass)
+
+    OS1.compute_look_angles()
+
+    earth_r = np.full((360,1), R_earth())
+    earth_theta = np.linspace(0, 2*pi, 360)
+
+    fig = plt.figure()
+    ax = fig.add_subplot(projection="polar", facecolor="lightgoldenrodyellow")
+    ax.set_title("Patrick Smith, ECE6390 HW2\nTimestep: {}".format(PCS_Time(_seconds=delta_t_1)))
+
+    ax.plot(earth_theta, earth_r, lw=1, color="tab:green", label='Earth, Radius 6390 km')
+
+    ax.plot(OS1.theta, OS1.r, lw=2, color="tab:orange", label='GEO orbit, Eccentricity: {:.3f}, Period: {}'.format(OS1.eccentricity, OS1.period))
+    ax.tick_params(grid_color="palegoldenrod")
+
+#     ax.set_rmax(150e3)
+    ax.set_rlabel_position(40)  # Move radial labels away from plotted line
+    angle = np.deg2rad(67.5)
+    ax.legend(loc="lower left",
+            bbox_to_anchor=(.5 + np.cos(angle)/2, .5 + np.sin(angle)/2))
+    ax.grid(True)
+
+    fig2 = plt.figure()
+    ax2 = fig2.add_subplot()
+    ax2.set_title("Patrick Smith, ECE6390 HW1\nTimestep: {}\nArea Density: {:.3f}".format(PCS_Time(_seconds=delta_t_1), area_density))
+
+    # ax2.plot(t, np.rad2deg(OS1.rotation_of_earth_in_fixed_frame), lw=2, color="tab:blue", label='rotation of earth, '.format())
+    # ax2.plot(t, np.rad2deg(OS1.theta), lw=2, color="tab:green", label='rotation of sat, '.format())
+    ax2.plot(t, np.rad2deg(OS1.ssp_lon), lw=2, color="tab:orange", label='Sat longitude, '.format())
+    ax2.plot(t, np.rad2deg(OS1.look_angle_azimuth), lw=2, color="tab:red", label='Look Angle Azimuth, '.format())
+    ax2.plot(t, np.rad2deg(OS1.look_angle_elevation), lw=2, color="tab:pink", label='Look Angle Elevation, '.format())
+
+    angle = np.deg2rad(67.5)
+    ax2.legend(loc="lower left",
+            bbox_to_anchor=(.5 + np.cos(angle)/2, .5 + np.sin(angle)/2))
+    ax2.grid(True)
+
+    fig3 = plt.figure()
+    ax3 = fig3.add_subplot(projection="polar", facecolor="lightgoldenrodyellow")
+    ax3.set_title("Patrick Smith, ECE6390 HW1\nTimestep: {}".format(PCS_Time(_seconds=delta_t_1)))
+    ax3.set_theta_zero_location("S")
+    ax3.set_rlabel_position(80)  # Move radial labels away from plotted line
+    ax3.plot(OS1.look_angle_azimuth, np.rad2deg(OS1.look_angle_elevation), lw=2, color="tab:red", label='Look Angles, '.format())
+    ax3.set_rmax(90)
+
+    angle = np.deg2rad(67.5)
+    ax3.legend(loc="lower left",
+            bbox_to_anchor=(.5 + np.cos(angle)/2, .5 + np.sin(angle)/2))
+    ax3.grid(True)
+
+    plt.show()
+
+    
